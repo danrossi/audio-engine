@@ -35,3 +35,8 @@ Support
 --------
 
 This is supplied as-is.
+
+Demo
+------------
+
+Fully functional demo available on the audio player features page http://flowplayer.electroteque.org/audio/fp5
