@@ -28,7 +28,7 @@ Compiling
 The `audio.js` distribution file is compiled with Uglify.js like so:
 
 ```bash
-uglifyjs audio.js --comments /@source/ --mangle -c > audio.min.js
+uglifyjs audio.js --comments src/audio.js --mangle -c > audio.min.js
 ```
 
 Support
