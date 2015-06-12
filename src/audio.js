@@ -1,7 +1,7 @@
 /* audio.js
- * Flowplayer 5 Audio Engine
+ * Flowplayer 6 Audio Engine
  * Modifications of the HTML5 video engine for audio support
- * 2015-02-24
+ * 2015-06-12
  *
  * By Daniel Rossi, Electroteque Media http://flowplayer.electroteque.org/audio/fp5
  * License: X11/MIT
@@ -13,53 +13,39 @@
 
 /*! @source https://github.com/danrossi/audio-engine/blob/master/src/audio.js */
 
-
+'use strict';
 !function() {
-    if (typeof $.fn.flowplayer == 'function') {
-        var s = flowplayer.support,
-            audio = $("<audio/>")[0];
 
+    var s = flowplayer.support,
+        audio = $("<audio/>")[0];
 
-        $.extend(s, {
-            audio: !!audio.canPlayType
-        });
-
-    }
+    flowplayer.extend(s, {
+        audio: !!audio.canPlayType
+    });
 }();
 
-var AUDIO = $('<audio/>')[0];
+function AudioEngine(player, root) {
+    this.common = flowplayer.common,
+        this.bean = flowplayer.bean,
+        this.support = flowplayer.support,
+        this.player = player,
+        this.root = root,
+        this.rootClasses = root.classList,
+        this.api = this.common.find("audio", root)[0],
+        this.engineName = "audio",
+        this.conf = player.conf,
+        this.timer,
+        this.volumeLevel,
+        this.created = false,
+        this.reload = false,
+        this.originalSources = [],
+        this.fallbackIndex;
 
-// HTML5 --> Flowplayer event
-var EVENTS = {
+}
 
-   // fired
-   ended: 'finish',
-   pause: 'pause',
-   play: 'resume',
-   progress: 'buffer',
-   timeupdate: 'progress',
-   volumechange: 'volume',
-   ratechange: 'speed',
-   seeking: 'beforeseek',
-   seeked: 'seek',
-   // abort: 'resume',
+AudioEngine.AUDIO = $('<audio/>')[0];
 
-   // not fired
-   //loadeddata: 'ready',
-
-   loadedmetadata: 'ready',
-   // canplay: 0,
-
-   // error events
-   // load: 0,
-   // emptied: 0,
-   // empty: 0,
-   error: 'error',
-   dataunavailable: 'error'
-
-};
-
-var TYPES = {
+AudioEngine.AUDIO_TYPES = {
     "mp4": 'audio/mp4; codecs="mp4a.40.2, mp4a.40.5"',
     "mpeg": 'audio/mpeg; codecs="mp3"',
     "ogg": 'audio/ogg; codecs="vorbis"',
@@ -68,271 +54,262 @@ var TYPES = {
     "audio/ogg": 'audio/ogg; codecs="vorbis"'
 }
 
-
-function round(val) {
-   return Math.round(val * 100) / 100;
-}
-
-function getAudioType(type) {
+AudioEngine.getAudioType = function(type) {
     return /mpegurl/i.test(type) ? "application/x-mpegurl" : "audio/" + type;
 }
 
-function canPlayAudio(type) {
-   return !!AUDIO.canPlayType(TYPES[type]).replace("no", '');
+
+AudioEngine.canPlayAudio = function(type) {
+    if (!/^(audio|application)/i.test(type))
+        type = AudioEngine.getAudioType(type);
+    return !!AudioEngine.AUDIO.canPlayType(AudioEngine.AUDIO_TYPES[type]).replace("no", '');
 }
 
-//var audioTagCache;
-var createAudioTag = function(audio) {
-    /*if (audioTagCache) {
-        return audioTagCache.attr({type: getAudioType(audio.type), src: audio.src});
-    } */
-    //return (audioTagCache = $("<audio/>", {
-    return ($("<audio/>", {
-        src: audio.src,
-        type: getAudioType(audio.type),
-        'class': 'fp-engine',
-        'autoplay': 'autoplay',
-        id: Math.random(),
-        preload: 'none',
-        'x-webkit-airplay': 'allow'
-    }));
+AudioEngine.prototype.pick = function(sources) {
+
+    if (flowplayer.support.audio) {
+        for (var i = 0; i < sources.length; i++) {
+            if (AudioEngine.canPlayAudio(sources[i].type)) return sources[i];
+        }
+    }
 }
 
-flowplayer.engine.audio = function(player, root) {
+AudioEngine.prototype.createAudioTag = function(video, autoplay, preload) {
+    if (typeof autoplay === 'undefined') autoplay = true;
+    if (typeof preload === 'undefined') preload = 'none';
+
+    var el  = document.createElement('audio');
+    el.src = video.src;
+    el.type = AudioEngine.getAudioType(video.type);
+    el.className = 'fp-engine';
+    el.autoplay = autoplay ? 'autoplay' : false;
+    el.preload = preload;
+    el.setAttribute('x-webkit-airplay', 'allow');
+    return el;
+}
+
+AudioEngine.prototype.load = function(video) {
+
+    var container = this.common.find('.fp-player', this.root)[0];
+    if (this.conf.splash && !this.api) {
+        this.api = this.createAudioTag(video);
+        this.common.prepend(container, this.api);
+        this.created = true;
+    } else if (!this.api) {
+        this.api = this.createAudioTag(video, !!video.autoplay || !!this.conf.autoplay, this.conf.clip.preload || 'metadata', false);
+        this.common.prepend(container, this.api);
+        this.created = true;
+    } else {
+        this.api.classList.add('fp-engine');
+        this.common.find('source,track', this.api).forEach(this.common.removeNode);
+        this.reload = this.api.src === video.src;
+    }
+    if (!flowplayer.support.inlineVideo) {
+        this.common.css(this.api, {
+            position: 'absolute',
+            top: '-9999em'
+        });
+    }
+
+    // IE does not fire delegated timeupdate events
+    //this.bean.off(this.api, 'timeupdate', this.common.noop);
+    //this.bean.on(this.api, 'timeupdate', this.common.noop);
+
+    this.common.prop(this.api, 'loop', !!(video.loop || this.conf.loop));
+
+    if (typeof this.volumeLevel !== 'undefined') {
+        this.api.volume = this.volumeLevel;
+    }
+
+    if (this.player.video.src && video.src != this.player.video.src || video.index) this.common.attr(this.api, 'autoplay', 'autoplay');
+    this.api.src = video.src;
+    this.api.type = video.type;
+
+    this.listen(this.api, this.common.find("source", this.api).concat(this.api), video);
+
+    // iPad (+others?) demands load()
+    if (this.conf.clip.preload != 'none' && video.type != "mpegurl" || !flowplayer.support.zeropreload || !flowplayer.support.dataload) this.api.load();
+    if (this.created || this.reload) api.load();
+    if (this.api.paused && video.autoplay) this.api.play();
+
+}
+
+AudioEngine.prototype.pause = function() {
+    this.api.pause();
+}
+
+AudioEngine.prototype.resume = function() {
+    this.api.play();
+}
+
+AudioEngine.prototype.speed = function(val) {
+    this.api.playbackRate = val;
+}
+
+AudioEngine.prototype.seek = function(time) {
+    try {
+        var pausedState = this.player.paused;
+        this.api.currentTime = time;
+        if (pausedState) this.api.pause();
+    } catch (ignored) {}
+}
+
+AudioEngine.prototype.volume = function(level) {
+    this.volumeLevel = level;
+    if (this.api) {
+        this.api.volume = level;
+    }
+}
+
+AudioEngine.prototype.unload = function() {
+    this.common.removeNode(this.common.find('audio.fp-engine', this.root)[0]);
+    this.timer = clearInterval(this.timer);
+    this.api = 0;
+}
+
+AudioEngine.prototype.triggerEvent = function (event, arg) {
+    this.player.trigger(event, [this.player, arg]);
+}
+
+AudioEngine.prototype.onEnded = function(e) {
+    this.triggerEvent("finish");
+}
+
+AudioEngine.prototype.onPaused = function(e) {
+    this.triggerEvent("pause");
+}
 
+AudioEngine.prototype.onBuffer = function(e) {
+    this.triggerEvent("buffer");
+}
 
-    var audioTag,
-      support = flowplayer.support,
-      track = $("track", $("video",root)),
-      conf = player.conf,
-      self,
-      timer,
-      originalSources,
-      fallbackIndex = 0,
-      api;
+AudioEngine.prototype.onPlay = function(e) {
+    this.triggerEvent("resume");
+}
 
+AudioEngine.prototype.onProgress = function(e) {
+    var arg;
 
+    if (this.api.currentTime > 0 || this.player.live)
+        arg = this.api.currentTime > 0 ? this.api.currentTime : 0;
 
-    $("video", root).remove();
+    this.triggerEvent("progress", arg);
+}
 
-    $(".fp-fullscreen", root).remove();
+AudioEngine.prototype.onSeek = function(e) {
+    var arg;
 
-   return self = {
+    if (this.api.currentTime > 0 || this.player.live)
+        arg = this.api.currentTime > 0 ? this.api.currentTime : 0;
 
-      pick: function(sources) {
+    this.triggerEvent("seek", arg);
+}
 
-         if (support.audio) {
-             originalSources = sources;
-            for (var i = 0, source; i < sources.length; i++) {
-               if (canPlayAudio(sources[i].type)) {
-                  // fallbackIndex = 0;
-                   return sources[i];
-               }
-            }
-         }
-      },
+AudioEngine.prototype.onVolumeChange = function(e) {
+    var arg = this.api.volume;
+    this.triggerEvent("volume", arg);
+}
 
-      load: function(video) {
+AudioEngine.prototype.onSpeed = function(e) {
+    var arg = this.api.playbackRate;
+    this.triggerEvent("speed", arg);
+}
 
-          if (conf.splash && !api) {
+AudioEngine.prototype.onError = function(e) {
+    var arg = (e.srcElement || e.originalTarget).error;
+    this.triggerEvent("error", arg);
+}
 
-              audioTag = createAudioTag(video).prependTo(root);
+AudioEngine.prototype.onReady = function(e) {
 
-             /* if (!support.inlineVideo) {
-                  audioTag.css({
-                      position: 'absolute',
-                      top: '-9999em'
-                  });
-              }*/
+    var arg = flowplayer.extend(this.player.video, {
+        duration: this.api.duration,
+        width: this.api.videoWidth,
+        height: this.api.videoHeight,
+        url: this.api.currentSrc,
+        src: this.api.currentSrc,
+        seekable: true
+    });
 
-              if (track.length) audioTag.append(track.attr("default", ""));
+    // buffer
+    this.timer = this.timer || setInterval(function () {
 
-              if (conf.loop) audioTag.attr("loop", "loop");
+            try {
+                arg.buffer = this.api.buffered.end(null);
 
-              api = audioTag[0];
-
-          } else {
-
-              api = audioTag[0];
-              var sources = audioTag.find('source');
-              if (!api.src && sources.length) {
-                  api.src = video.src;
-                  sources.remove();
-              }
-
-
-              // change of clip
-              if (player.video.src && video.src != player.video.src || fallbackIndex) {
-                  audioTag.attr("autoplay", "autoplay");
-                  api.src = video.src;
-
-                  // preload=none or no initial "loadeddata" event
-              } else if (conf.preload == 'none' || !support.dataload) {
-
-                  if (support.zeropreload) {
-                      player.trigger("ready", video).trigger("pause").one("ready", function() {
-                          root.trigger("resume", [player]);
-                      });
-
-                  } else {
-                      player.one("ready", function() {
-                          root.trigger("pause", [player]);
-                      });
-                  }
-              }
-
-          }
-
-
-         listen(api, video, $("source", audioTag).add(audioTag));
-
-          if (conf.preload != 'none' || !support.zeropreload || !support.dataload) api.load();
-          if (conf.splash) api.load();
-
-      },
-
-      pause: function() {
-         api.pause();
-      },
-
-      resume: function() {
-         api.play();
-      },
-
-      speed: function(val) {
-         api.playbackRate = val;
-      },
-
-      seek: function(time) {
-         try {
-            api.currentTime = time;
-         } catch (ignored) {}
-      },
-
-      volume: function(level) {
-         api.volume = level;
-      },
-
-      unload: function() {
-         $("audio", root).remove();
-         timer = clearInterval(timer);
-         api = 0;
-      }
-
-   };
-
-   function listen(api, video, sources) {
-      // listen only once
-      if (api.listening) return; api.listening = true;
-
-      player.bind("error", function(event,api,video) {
-          if (fallbackIndex < originalSources.length) root.removeClass("is-error");
-      });
-
-      sources.bind("error", function(e) {
-          root.removeClass("is-error");
-         if (canPlayAudio($(e.target).attr("type")) && fallbackIndex >= originalSources.length) {
-            player.trigger("error", { code: 4 });
-         } else {
-             root.removeClass("is-error");
-             fallbackIndex++;
-             self.load(originalSources[fallbackIndex]);
-         }
-      });
-
-
-      $.each(EVENTS, function(type, flow) {
-
-         api.addEventListener(type, function(e) {
-
-            // safari hack for bad URL (10s before fails)
-            if (flow == "progress" && e.srcElement && e.srcElement.readyState === 0) {
-               setTimeout(function() {
-                  if (!player.video.duration) {
-                     flow = "error";
-                     player.trigger(flow, { code: 4 });
-                  }
-               }, 10000);
-            }
-
-            if (conf.debug && !/progress/.test(flow)) console.log(type, "->", flow, e);
-
-            // no events if player not ready
-            if (!player.ready && !/ready|error/.test(flow) || !flow || !$("audio", root).length) { return; }
-
-            var event = $.Event(flow), arg;
-
-            switch (flow) {
-
-               case "ready":
-                  fallbackIndex = 0;
-
-                  arg = $.extend(video, {
-                     duration: api.duration,
-                     width: api.videoWidth,
-                     height: api.videoHeight,
-                     url: api.currentSrc,
-                     src: api.currentSrc
-                  });
-
-                  try {
-                     video.seekable = api.seekable && api.seekable.end(null);
-
-                  } catch (ignored) {}
-
-                  // buffer
-                  timer = timer || setInterval(function() {
-
-                     try {
-                        video.buffer = api.buffered.end(null);
-
-                     } catch (ignored) {}
-
-                     if (video.buffer) {
-                        if (video.buffer <= video.duration && !video.buffered) {
-                           player.trigger("buffer", e);
-
-                        } else if (!video.buffered) {
-                           video.buffered = true;
-                           player.trigger("buffer", e).trigger("buffered", e);
-                           clearInterval(timer);
-                           timer = 0;
-                        }
-                     }
-
-                  }, 250);
-
-                  break;
-
-               case "progress": case "seek":
-
-                  if (api.currentTime > 0) {
-                     arg = Math.max(api.currentTime, 0);
-                     break;
-
-                  } else if (flow == 'progress') {
-                     return;
-                  }
-
-
-               case "speed":
-                  arg = round(api.playbackRate);
-                  break;
-
-               case "volume":
-                  arg = round(api.volume);
-                  break;
-
-               case "error":
-                  arg = (e.srcElement || e.originalTarget).error;
+            } catch (ignored) {
             }
 
-            player.trigger(event, arg);
+            if (arg.buffer) {
+                if (~~ (0.5 + arg.buffer) < ~~ (0.5 + arg.duration) && !arg.buffered) {
+                    this.player.trigger("buffer", e);
 
-         }, false);
+                } else if (!arg.buffered) {
+                    arg.buffered = true;
+                    this.player.trigger("buffer", e).trigger("buffered", e);
+                    clearInterval(this.timer);
+                    this.timer = 0;
+                }
+            }
 
-      });
+        }.bind(this), 250);
 
-   }
+    this.triggerEvent("ready", arg);
+}
 
+
+AudioEngine.prototype.listen = function(api, sources, video) {
+    // listen only once
+    var instanceId = this.root.getAttribute('data-flowplayer-instance-id');
+
+    if (api.listeners && api.listeners.hasOwnProperty(instanceId)) {
+        api.listeners[instanceId] = video;
+        return;
+    }
+    (api.listeners || (api.listeners = {}))[instanceId] = video;
+
+    this.player.on("error", function(event,api,video) {
+        if (this.fallbackIndex < this.originalSources.length) this.rootClasses.remove("is-error");
+    });
+
+    this.bean.on(sources, 'error', function(e) {
+        this.rootClasses.remove("is-error");
+
+        if (AudioEngine.canPlayAudio(e.target.getAttribute('type')) && this.fallbackIndex >= this.originalSources.length) {
+            this.player.trigger("error", { code: 4, video: extend(video, {src: api.src, url: api.src}) });
+        } else {
+            this.rootClasses.remove("is-error");
+            this.fallbackIndex++;
+            this.load(this.originalSources[this.fallbackIndex]);
+        }
+    }.bind(this));
+
+    this.api.addEventListener("ended", this.onEnded.bind(this));
+    this.api.addEventListener("pause", this.onPaused.bind(this));
+    this.api.addEventListener("play", this.onPlay.bind(this));
+    this.api.addEventListener("progress", this.onBuffer.bind(this));
+    this.api.addEventListener("timeupdate", this.onProgress.bind(this));
+    this.api.addEventListener("volumechange", this.onVolumeChange.bind(this));
+    this.api.addEventListener("ratechange", this.onSpeed.bind(this));
+    this.api.addEventListener("seeked", this.onSeek.bind(this));
+    this.api.addEventListener("loadedmetadata", this.onReady.bind(this));
+    this.api.addEventListener("error", this.onError.bind(this));
+    this.api.addEventListener("dataunavailable", this.onError.bind(this));
+}
+
+
+function AudioEngineWrapper(player, root) {
+    return new AudioEngine(player, root);
+}
+
+var audioEngine = AudioEngineWrapper;
+
+
+audioEngine.canPlay = function(type) {
+    return flowplayer.support.audio && AudioEngine.canPlayAudio(type);
 };
+
+audioEngine.engineName = 'audio';
+
+//make the audio engine the first in the list as the video tag seems to detect it can play some mimetypes.
+flowplayer.engines.unshift(audioEngine);
