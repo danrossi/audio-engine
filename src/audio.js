@@ -129,7 +129,7 @@ AudioEngine.prototype.load = function(video) {
 
     // iPad (+others?) demands load()
     if (this.conf.clip.preload != 'none' && video.type != "mpegurl" || !flowplayer.support.zeropreload || !flowplayer.support.dataload) this.api.load();
-    if (this.created || this.reload) api.load();
+    if (this.created || this.reload) this.api.load();
     if (this.api.paused && video.autoplay) this.api.play();
 
 }
