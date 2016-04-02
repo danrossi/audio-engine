@@ -39,7 +39,7 @@ function AudioEngine(player, root) {
         this.created = false,
         this.reload = false,
         this.originalSources = [],
-        this.fallbackIndex;
+        this.fallbackIndex = 0;
 
 }
 
@@ -270,7 +270,7 @@ AudioEngine.prototype.listen = function(api, sources, video) {
 
     this.player.on("error", function(event,api,video) {
         if (this.fallbackIndex < this.originalSources.length) this.rootClasses.remove("is-error");
-    });
+    }.bind(this));
 
     this.bean.on(sources, 'error', function(e) {
         this.rootClasses.remove("is-error");
